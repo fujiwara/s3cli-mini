@@ -372,49 +372,52 @@ func (c *client) locals3recursive(src, dist string) error {
 	return err
 }
 
+func (c *client) s3stdout(bucket, key string) error {
+	if dryrun {
+		c.cmd.PrintErrf("download s3://%s/%s to STDOUT\n", bucket, key)
+		return nil
+	}
+	res, err := c.s3.GetObjectRequest(req).Send(c.ctx)
+	if err != nil {
+		return err
+	}
+	body := res.GetObjectOutput.Body
+	if _, err := io.Copy(os.Stdout, body); err != nil {
+		return err
+	}
+	return body.Close()
+}
+
 func (c *client) s3local(src, dist string) error {
 	bucket, key := parsePath(src)
 	if key == "" || key[len(key)-1] == '/' {
 		c.cmd.PrintErrln("Error: Invalid argument type")
 		os.Exit(1)
 	}
-	req := &s3.GetObjectInput{
+	if dist == "-" {
+		return c.s3stdout(bucket, key)
+	}
+	if info, err := os.Stat(dist); err == nil && info.IsDir() {
+		dist = filepath.Join(dist, path.Base(key))
+	}
+	if dryrun {
+		c.cmd.PrintErrf("download s3://%s/%s to %s\n", bucket, key, dist)
+		return nil
+	}
+
+	f, err := os.OpenFile(dist, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	_, err = c.downloader.DownloadWithContext(c.ctx, f, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
+	})
+	if err != nil {
+		return err
 	}
-	if dist == "-" {
-		if dryrun {
-			c.cmd.PrintErrf("download s3://%s/%s to STDOUT\n", bucket, key)
-			return nil
-		}
-		res, err := c.s3.GetObjectRequest(req).Send(c.ctx)
-		if err != nil {
-			return err
-		}
-		body := res.GetObjectOutput.Body
-		if _, err := io.Copy(os.Stdout, body); err != nil {
-			return err
-		}
-		body.Close()
-	} else {
-		if info, err := os.Stat(dist); err == nil && info.IsDir() {
-			dist = filepath.Join(dist, path.Base(key))
-		}
-		if dryrun {
-			c.cmd.PrintErrf("download s3://%s/%s to %s\n", bucket, key, dist)
-			return nil
-		}
-		f, err := os.OpenFile(dist, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
-		if err != nil {
-			return err
-		}
-		_, err = c.downloader.DownloadWithContext(c.ctx, f, req)
-		if err != nil {
-			return err
-		}
-		if err := f.Close(); err != nil {
-			return err
-		}
+	if err := f.Close(); err != nil {
+		return err
 	}
 	c.cmd.PrintErrf("download s3://%s/%s to %s\n", bucket, key, dist)
 	return nil
