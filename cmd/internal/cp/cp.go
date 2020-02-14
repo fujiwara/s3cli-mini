@@ -213,6 +213,23 @@ func (c *client) Run(src, dist string) {
 	panic("will not reach")
 }
 
+func (c *client) stdins3(bucket, key string) error {
+	input := &s3.PutObjectInput{
+		Body:               os.Stdin,
+		Bucket:             aws.String(bucket),
+		Key:                aws.String(key),
+		ACL:                c.acl,
+		ContentType:        getContentType(key),
+		CacheControl:       nullableString(cacheControl),
+		ContentDisposition: nullableString(contentDisposition),
+		ContentEncoding:    nullableString(contentEncoding),
+		ContentLanguage:    nullableString(contentLanguage),
+		Expires:            c.expires,
+	}
+	_, err := c.s3.PutObjectRequest(input).Send(c.ctx)
+	return err
+}
+
 func (c *client) locals3(src, dist string) error {
 	bucket, key := parsePath(dist)
 	if key == "" || key[len(key)-1] == '/' {
@@ -223,15 +240,12 @@ func (c *client) locals3(src, dist string) error {
 		return nil
 	}
 
-	var f io.ReadCloser
-	var err error
 	if src == "-" {
-		f = os.Stdin
-	} else {
-		f, err = os.Open(src)
-		if err != nil {
-			return err
-		}
+		return c.stdins3(bucket, key)
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return err
 	}
 	defer f.Close()
 
@@ -383,7 +397,10 @@ func (c *client) s3stdout(bucket, key string) error {
 		c.cmd.PrintErrf("download s3://%s/%s to STDOUT\n", bucket, key)
 		return nil
 	}
-	res, err := c.s3.GetObjectRequest(req).Send(c.ctx)
+	res, err := c.s3.GetObjectRequest(&s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}).Send(c.ctx)
 	if err != nil {
 		return err
 	}
