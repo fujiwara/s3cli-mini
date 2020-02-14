@@ -3,6 +3,7 @@ package cp
 import (
 	"context"
 	"fmt"
+	"io"
 	"mime"
 	"os"
 	"path"
@@ -212,6 +213,23 @@ func (c *client) Run(src, dist string) {
 	panic("will not reach")
 }
 
+func (c *client) stdins3(bucket, key string) error {
+	input := &s3.PutObjectInput{
+		Body:               os.Stdin,
+		Bucket:             aws.String(bucket),
+		Key:                aws.String(key),
+		ACL:                c.acl,
+		ContentType:        getContentType(key),
+		CacheControl:       nullableString(cacheControl),
+		ContentDisposition: nullableString(contentDisposition),
+		ContentEncoding:    nullableString(contentEncoding),
+		ContentLanguage:    nullableString(contentLanguage),
+		Expires:            c.expires,
+	}
+	_, err := c.s3.PutObjectRequest(input).Send(c.ctx)
+	return err
+}
+
 func (c *client) locals3(src, dist string) error {
 	bucket, key := parsePath(dist)
 	if key == "" || key[len(key)-1] == '/' {
@@ -222,6 +240,9 @@ func (c *client) locals3(src, dist string) error {
 		return nil
 	}
 
+	if src == "-" {
+		return c.stdins3(bucket, key)
+	}
 	f, err := os.Open(src)
 	if err != nil {
 		return err
@@ -371,11 +392,33 @@ func (c *client) locals3recursive(src, dist string) error {
 	return err
 }
 
+func (c *client) s3stdout(bucket, key string) error {
+	if dryrun {
+		c.cmd.PrintErrf("download s3://%s/%s to STDOUT\n", bucket, key)
+		return nil
+	}
+	res, err := c.s3.GetObjectRequest(&s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}).Send(c.ctx)
+	if err != nil {
+		return err
+	}
+	body := res.GetObjectOutput.Body
+	if _, err := io.Copy(os.Stdout, body); err != nil {
+		return err
+	}
+	return body.Close()
+}
+
 func (c *client) s3local(src, dist string) error {
 	bucket, key := parsePath(src)
 	if key == "" || key[len(key)-1] == '/' {
 		c.cmd.PrintErrln("Error: Invalid argument type")
 		os.Exit(1)
+	}
+	if dist == "-" {
+		return c.s3stdout(bucket, key)
 	}
 	if info, err := os.Stat(dist); err == nil && info.IsDir() {
 		dist = filepath.Join(dist, path.Base(key))
