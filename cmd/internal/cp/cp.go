@@ -3,6 +3,7 @@ package cp
 import (
 	"context"
 	"fmt"
+	"io"
 	"mime"
 	"os"
 	"path"
@@ -377,27 +378,43 @@ func (c *client) s3local(src, dist string) error {
 		c.cmd.PrintErrln("Error: Invalid argument type")
 		os.Exit(1)
 	}
-	if info, err := os.Stat(dist); err == nil && info.IsDir() {
-		dist = filepath.Join(dist, path.Base(key))
-	}
-	if dryrun {
-		c.cmd.PrintErrf("download s3://%s/%s to %s\n", bucket, key, dist)
-		return nil
-	}
-
-	f, err := os.OpenFile(dist, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
-	if err != nil {
-		return err
-	}
-	_, err = c.downloader.DownloadWithContext(c.ctx, f, &s3.GetObjectInput{
+	req := &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	})
-	if err != nil {
-		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
+	if dist == "-" {
+		if dryrun {
+			c.cmd.PrintErrf("download s3://%s/%s to STDOUT\n", bucket, key)
+			return nil
+		}
+		res, err := c.s3.GetObjectRequest(req).Send(c.ctx)
+		if err != nil {
+			return err
+		}
+		body := res.GetObjectOutput.Body
+		if _, err := io.Copy(os.Stdout, body); err != nil {
+			return err
+		}
+		body.Close()
+	} else {
+		if info, err := os.Stat(dist); err == nil && info.IsDir() {
+			dist = filepath.Join(dist, path.Base(key))
+		}
+		if dryrun {
+			c.cmd.PrintErrf("download s3://%s/%s to %s\n", bucket, key, dist)
+			return nil
+		}
+		f, err := os.OpenFile(dist, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
+		if err != nil {
+			return err
+		}
+		_, err = c.downloader.DownloadWithContext(c.ctx, f, req)
+		if err != nil {
+			return err
+		}
+		if err := f.Close(); err != nil {
+			return err
+		}
 	}
 	c.cmd.PrintErrf("download s3://%s/%s to %s\n", bucket, key, dist)
 	return nil
