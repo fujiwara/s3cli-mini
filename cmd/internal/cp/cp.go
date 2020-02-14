@@ -223,9 +223,15 @@ func (c *client) locals3(src, dist string) error {
 		return nil
 	}
 
-	f, err := os.Open(src)
-	if err != nil {
-		return err
+	var f io.ReadCloser
+	var err error
+	if src == "-" {
+		f = os.Stdin
+	} else {
+		f, err = os.Open(src)
+		if err != nil {
+			return err
+		}
 	}
 	defer f.Close()
 
